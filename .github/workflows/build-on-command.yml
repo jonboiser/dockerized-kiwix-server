@@ -1,0 +1,87 @@
+name: build-on-command
+
+# Lets an issue conversation trigger an autonomous build: comment `/build`
+# on an issue and an agent implements the issue, pushes a branch, and opens a PR.
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  build:
+    # Only on plain issues (not PR comments), only the exact /build command,
+    # only from the repo owner — the agent gets write tokens, so do not let
+    # arbitrary commenters trigger it.
+    if: >-
+      github.event.issue.pull_request == null &&
+      github.event.comment.body == '/build' &&
+      github.event.comment.user.login == 'jonboiser'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: build-issue-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      KIMI_MODEL_NAME: ${{ vars.KIMI_MODEL_NAME || 'kimi-for-coding' }}
+      KIMI_MODEL_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      KIMI_DISABLE_TELEMETRY: '1'
+    steps:
+      - name: Acknowledge the command
+        run: |
+          gh api "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -X POST -f content=rocket --silent
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Kimi Code CLI
+        run: |
+          curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          kimi --version
+
+      - name: Collect issue context
+        run: |
+          {
+            echo "# Issue #${ISSUE_NUMBER}: ${{ github.event.issue.title }}"
+            echo
+            gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq .body
+            echo
+            echo "## Conversation so far"
+            gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+              --jq '.[] | "---\n@\(.user.login):\n\(.body)\n"'
+          } > issue-context.md
+
+      - name: Implement the issue
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          kimi -p "$(cat <<'EOF'
+          You are working in the GitHub repository checked out in the current directory.
+          The file issue-context.md contains a GitHub issue (title, body, and the full
+          comment conversation). Read it first.
+
+          Your job: implement what the issue asks for. Treat the conversation as
+          additional context and decisions made there as binding.
+
+          Rules:
+          - Make the minimal, focused change the issue describes. Nothing more.
+          - Create a branch named issue-<ISSUE_NUMBER>-build (replace <ISSUE_NUMBER>
+            with the issue number) from the default branch and do all work there.
+          - If the repo has tests or a build, run them to verify your change.
+          - Commit with a clear message referencing the issue number.
+          - Push the branch, then open a pull request with `gh pr create`
+            (body: summary of the change, "Closes #<ISSUE_NUMBER>").
+          - Finally, comment on the issue with `gh issue comment` linking the PR.
+          - If the issue is unclear or cannot be implemented safely, do NOT push
+            anything; instead comment on the issue explaining what is blocking you.
+          EOF
+          )"
