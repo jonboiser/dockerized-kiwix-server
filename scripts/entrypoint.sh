@@ -2,7 +2,8 @@
 ZIMDIR=${ZIMDIR:-/zims}
 LIBRARY_XML=/library.xml
 
-touch /library.xml
+# kiwix-manage creates the library file if it does not exist,
+# but rejects an empty file, so do not touch it beforehand.
 
 for f in "$ZIMDIR"/*.zim; do
   if [[ -f "$f" ]]; then
