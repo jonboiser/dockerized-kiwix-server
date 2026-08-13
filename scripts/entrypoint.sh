@@ -1,6 +1,6 @@
 #!/bin/bash
 ZIMDIR=${ZIMDIR:-/zims}
-LIBRARY_XML=/library.xml
+LIBRARY_XML=/home/kiwix/library.xml
 
 for f in "$ZIMDIR"/*.zim; do
   if [[ -f "$f" ]]; then
