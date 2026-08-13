@@ -1,50 +1,61 @@
 # dockerized-kiwix-server
 
-## Recent changes
+A Docker Compose stack combining a **Kiwix Server** backend with a modern **SolidStart 2** frontend for browsing, downloading, and managing offline ZIM knowledge packages from Zimfarm.
 
-I incorporated some refactors from https://github.com/assarbad/containerized-kiwix-server. Check out this version if you want to use podman and other nice features of this approach (e.g. using `make` for some build steps).
+## Features
 
-## Step 1: Download some ZIM files
+- 📦 **Zimfarm OPDS Catalog Explorer**: Search and filter over 3,600+ offline ZIM archives (Wikipedia, DevDocs, Stack Overflow, Gutenberg, TED, etc.) by language and category.
+- ⚡ **One-Click ZIM Installation**: Download ZIM packages directly into the shared `./zims` volume with real-time speed, percentage, and progress tracking.
+- 💾 **Local ZIM Library Management**: View installed ZIM files, inspect disk usage, and delete unwanted archives.
+- 📖 **Embedded Kiwix Reader**: Launch and read Kiwix offline content directly in the frontend or at `http://localhost:8080`.
+- 🐳 **Docker Compose Ready**: Multi-container setup orchestrating `kiwix-serve` and the `frontend`.
 
-[FTP site with ZIM files](https://ftp.fau.de/kiwix/zim/)
+---
 
-## Step 2: Move the ZIM files to the 'zim' directory
+## Quick Start (Docker Compose)
 
-```shell
-# inside the folder where you downloaded the ZIMs (e.g. ~/Downloads)
-$ mkdir -p ./dockerized-kiwix-server/zims
-$ cp *.zim ./dockerized-kiwix-server/zims
-```
-
-## Step 3: Build the Docker container
-
-This will create the Linux machine, download the latest version of Kiwix tools (including `kiwix-serve`), copy the ZIM files over, then create the Kiwix library XML file.
+### 1. Clone & Start the Stack
 
 ```shell
-$ pwd # -> ./dockerized-kiwix-server
-$ docker build -t kiwix-serve .
+git clone https://github.com/jonboiser/dockerized-kiwix-server.git
+cd dockerized-kiwix-server
+
+# Start Kiwix Server + SolidStart Frontend
+docker compose up -d
 ```
 
-## Step 4: Run the container
+### 2. Access the Applications
 
-This starts the container and the Kiwix server, and makes it available on your machine at `http://localhost:8080`.
+- **SolidStart Frontend (Zimfarm Studio):** [http://localhost:3000](http://localhost:3000)
+- **Kiwix Server Reader:** [http://localhost:8080](http://localhost:8080)
+
+---
+
+## Local Development (Frontend)
+
+To work on the SolidStart 2 frontend locally without Docker:
 
 ```shell
-$ docker run -d --name kiwix-serve -v $(pwd)/zims:/zims:ro -p 8080:8080 kiwix-serve
+cd frontend
+npm install
+npm run dev
 ```
 
-To turn it off:
+The frontend will run at `http://localhost:3000` and default to saving downloads into `../zims`.
 
-```shell
-$ docker stop $(docker ps -qf "name=kiwix-serve")
+---
+
+## Service Architecture
+
 ```
-
-To start it again:
-
-```shell
-$ docker start kiwix-serve
+┌─────────────────────────────────┐       ┌──────────────────────────────────┐
+│ SolidStart 2 Frontend (3000)    │       │ Kiwix Server (8080)              │
+│ - Zimfarm OPDS Catalog Explorer │       │ - Serves /zims/*.zim             │
+│ - Download Manager              │       │ - Auto-generates library.xml     │
+└────────────────┬────────────────┘       └────────────────┬─────────────────┘
+                 │                                         │
+                 └───────────────────┬─────────────────────┘
+                                     │
+                             Shared Volume
+                             ./zims:/zims
 ```
-
-## Step 5: Try it out in the browser
-
-Go to http://localhost:8080.
