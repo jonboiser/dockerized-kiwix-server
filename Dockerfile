@@ -1,6 +1,7 @@
-FROM ubuntu:focal
-RUN apt-get update
-RUN apt-get install -y wget
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
 VOLUME /zims
 WORKDIR /
 COPY ./scripts ./scripts
