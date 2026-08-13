@@ -48,3 +48,23 @@ $ docker start kiwix-serve
 ## Step 5: Try it out in the browser
 
 Go to http://localhost:8080.
+
+## Automated smoke test with Podman
+
+The smoke test builds the current `Dockerfile`, chooses the smallest ZIM in
+`zims/`, starts Kiwix on localhost, creates a Cloudflare quick tunnel, and
+checks that the ZIM is reachable through the public URL. The container and
+tunnel are removed automatically after the check.
+
+```shell
+./scripts/smoke-test.sh
+```
+
+Keep the public URL open for manual testing until you press Ctrl-C:
+
+```shell
+./scripts/smoke-test.sh --keep-open
+```
+
+Use `--zim PATH` or `--port PORT` to override the selected ZIM or localhost
+port. The test requires `podman`, `curl`, and `cloudflared` on the host.
