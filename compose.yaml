@@ -1,0 +1,39 @@
+services:
+  kiwix:
+    # Official Kiwix image: https://github.com/kiwix/kiwix-tools/pkgs/container/kiwix-tools
+    image: ${KIWIX_IMAGE:-ghcr.io/kiwix/kiwix-tools:latest}
+    # Fixed name so the frontend can restart this container via the runtime socket.
+    container_name: kiwix
+    # Wait until at least one ZIM exists, then serve everything in /zims.
+    # The frontend restarts this container after the library changes.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        until ls /zims/*.zim >/dev/null 2>&1; do
+          echo "No ZIM files in /zims yet - use the frontend on port 3000 to download some."
+          sleep 5
+        done
+        exec kiwix-serve --port 8080 /zims/*.zim
+    volumes:
+      - ./zims:/zims:ro
+    ports:
+      # Reader UI: local by default; opt into LAN access as documented.
+      - "${KIWIX_BIND_ADDRESS:-127.0.0.1}:8080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    volumes:
+      - ./zims:/zims
+      # Lets the frontend restart the kiwix container after downloads finish.
+      # Override CONTAINER_SOCKET for rootless podman; see the README.
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    ports:
+      # Management UI: keep local because it can delete files and restart containers.
+      - "127.0.0.1:3000:3000"
+    environment:
+      ZIMDIR: /zims
+      KIWIX_CONTAINER: kiwix
+      ALLOWED_DOWNLOAD_HOSTS: ${ALLOWED_DOWNLOAD_HOSTS:-download.kiwix.org,lb.download.kiwix.org,mirror.download.kiwix.org}
+    restart: unless-stopped
