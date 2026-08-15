@@ -1,0 +1,31 @@
+services:
+  kiwix:
+    # Official Kiwix image: https://github.com/kiwix/kiwix-tools/pkgs/container/kiwix-tools
+    image: ghcr.io/kiwix/kiwix-tools:latest
+    # kiwix-serve only loads ZIMs listed at startup, so wait until at least
+    # one exists, then serve everything in /zims. After adding or removing
+    # ZIMs, run `docker compose restart kiwix` to pick them up.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        until ls /zims/*.zim >/dev/null 2>&1; do
+          echo "No ZIM files in /zims yet - use the frontend on port 3000 to download some."
+          sleep 5
+        done
+        exec kiwix-serve --port 8080 /zims/*.zim
+    volumes:
+      - ./zims:/zims
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    volumes:
+      - ./zims:/zims
+    ports:
+      - "3000:3000"
+    environment:
+      ZIMDIR: /zims
+    restart: unless-stopped
