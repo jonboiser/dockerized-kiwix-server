@@ -5,13 +5,16 @@ Serves a single styled page that lets you:
   * search the Kiwix ZIM catalog (https://library.kiwix.org/catalog/v2)
   * download ZIM files into the volume shared with the kiwix-serve container
   * view/delete the ZIM files already installed
+  * restart kiwix-serve via the container runtime socket so it picks up
+    new ZIMs automatically (no terminal trip needed)
 
 Pure standard library, pure HTML forms + CSS. No JavaScript anywhere.
 """
 
 import html
+import http.client
 import os
-import re
+import socket
 import threading
 import time
 import urllib.parse
@@ -24,7 +27,12 @@ PORT = int(os.environ.get("PORT", "3000"))
 CATALOG_URL = "https://library.kiwix.org/catalog/v2/entries"
 CATALOG_BASE = "https://library.kiwix.org"
 USER_AGENT = "dockerized-kiwix-server/2.0"
-MAX_RESULTS = 24
+CATALOG_PAGE_SIZE = 24
+
+# Docker-compatible socket used to restart kiwix-serve after downloads.
+# Works with both docker (/var/run/docker.sock) and podman (compat API).
+DOCKER_SOCKET = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
+KIWIX_CONTAINER = os.environ.get("KIWIX_CONTAINER", "kiwix")
 
 LANGUAGES = {
     "": "All languages",
@@ -43,7 +51,7 @@ LANGUAGES = {
 # filename -> {title, status, downloaded, total, error}
 downloads = {}
 downloads_lock = threading.Lock()
-# lang -> (timestamp, [entry])
+# (query, lang, page) -> (timestamp, [entry])
 catalog_cache = {}
 catalog_lock = threading.Lock()
 
@@ -61,17 +69,48 @@ def format_bytes(n):
         n /= 1024
 
 
-def fetch_catalog(lang):
-    """Fetch and parse the OPDS catalog, with a 5-minute in-memory cache."""
+def restart_kiwix():
+    """Restart the kiwix container through the docker-compatible socket.
+
+    Returns True on success, False if the socket is unavailable or the
+    runtime rejects the request.
+    """
+    if not os.path.exists(DOCKER_SOCKET):
+        return False
+
+    class UnixHTTPConnection(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.connect(DOCKER_SOCKET)
+
+    try:
+        conn = UnixHTTPConnection("localhost", timeout=30)
+        container = urllib.parse.quote(KIWIX_CONTAINER, safe="")
+        conn.request("POST", f"/containers/{container}/restart")
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        return resp.status in (200, 204)
+    except (OSError, http.client.HTTPException):
+        return False
+
+
+def fetch_catalog(q, lang, page):
+    """Fetch and parse one page of the OPDS catalog (5-min in-memory cache)."""
     now = time.time()
+    key = (q, lang, page)
     with catalog_lock:
-        hit = catalog_cache.get(lang)
+        hit = catalog_cache.get(key)
         if hit and now - hit[0] < 300:
             return hit[1]
 
-    url = CATALOG_URL + "?count=100"
+    start = (page - 1) * CATALOG_PAGE_SIZE
+    query = {"count": CATALOG_PAGE_SIZE, "start": start}
+    if q:
+        query["q"] = q
     if lang:
-        url += "&lang=" + urllib.parse.quote(lang)
+        query["lang"] = lang
+    url = CATALOG_URL + "?" + urllib.parse.urlencode(query)
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
         "Accept": "application/atom+xml, application/xml, text/xml",
@@ -106,18 +145,12 @@ def fetch_catalog(lang):
             entries.append(entry)
 
     with catalog_lock:
-        catalog_cache[lang] = (now, entries)
+        catalog_cache[key] = (now, entries)
     return entries
 
 
-def search_catalog(q, lang):
-    entries = fetch_catalog(lang)
-    if q:
-        ql = q.lower()
-        entries = [e for e in entries
-                   if ql in e["title"].lower() or ql in e["summary"].lower()
-                   or ql in e["filename"].lower()]
-    return entries[:MAX_RESULTS]
+def search_catalog(q, lang, page):
+    return fetch_catalog(q, lang, page)
 
 
 def list_installed():
@@ -152,6 +185,10 @@ def download_worker(url, filename, title):
         os.replace(tmp_path, final_path)
         with downloads_lock:
             downloads[filename]["status"] = "completed"
+        if restart_kiwix():
+            print(f"[frontend] Restarted {KIWIX_CONTAINER} to pick up {filename}")
+        else:
+            print(f"[frontend] Downloaded {filename}; restart kiwix manually to serve it")
     except Exception as e:
         with downloads_lock:
             downloads[filename]["status"] = "failed"
@@ -188,7 +225,7 @@ h2 .count { color: #8b949e; font-weight: normal; font-size: .9em; }
 }
 .notice.error { background: #f8514922; border-color: #f85149; }
 .hint { color: #8b949e; font-size: .9rem; }
-form.search { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+form.search { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .5rem; }
 input[type=text], input[type=url], select {
   background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
   border-radius: 6px; padding: .5rem .75rem; font-size: 1rem;
@@ -196,12 +233,17 @@ input[type=text], input[type=url], select {
 input[type=text] { flex: 1; min-width: 200px; }
 input:focus, select:focus { outline: 2px solid #1f6feb; border-color: transparent; }
 button, .btn {
-  background: #238636; color: #fff; border: none; border-radius: 6px;
-  padding: .5rem 1rem; font-size: .95rem; cursor: pointer; white-space: nowrap;
+  display: inline-block; background: #238636; color: #fff; border: none;
+  border-radius: 6px; padding: .5rem 1rem; font-size: .95rem; cursor: pointer;
+  white-space: nowrap; text-decoration: none;
 }
-button:hover { background: #2ea043; }
+button:hover, .btn:hover { background: #2ea043; }
 button.danger { background: #da3633; }
 button.danger:hover { background: #f85149; }
+.btn.neutral, button.neutral { background: #21262d; border: 1px solid #30363d; color: #e6edf3; }
+.btn.neutral:hover, button.neutral:hover { background: #30363d; }
+.pager { display: flex; gap: .5rem; align-items: center; margin-top: 1rem; }
+.pager .page-num { color: #8b949e; font-size: .9rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
 .card {
   display: flex; gap: .9rem; background: #161b22; border: 1px solid #30363d;
@@ -233,7 +275,8 @@ footer { text-align: center; color: #8b949e; font-size: .85rem; padding: 2rem 1r
 """
 
 
-def render_page(q, lang, msg, msg_error):
+def render_page(q, lang, page, msg, msg_error):
+    socket_ok = os.path.exists(DOCKER_SOCKET)
     parts = ["<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>",
              "<meta name='viewport' content='width=device-width, initial-scale=1'>",
              "<title>Kiwix Bootstrap</title>", f"<style>{PAGE_CSS}</style>"]
@@ -258,9 +301,12 @@ def render_page(q, lang, msg, msg_error):
         sel = " selected" if code == lang else ""
         parts.append(f"<option value='{esc(code)}'{sel}>{esc(name)}</option>")
     parts.append("</select><button type='submit'>Search</button></form>")
+    parts.append("<p class='hint'>Searches the full Kiwix catalog; simple terms "
+                 "like <em>wikipedia</em> work best. Use the pager below the results "
+                 "to see more matches.</p>")
 
     try:
-        results = search_catalog(q, lang)
+        results = search_catalog(q, lang, page)
         if results:
             parts.append("<div class='grid'>")
             for e in results:
@@ -280,7 +326,17 @@ def render_page(q, lang, msg, msg_error):
                     f"</div></div>")
             parts.append("</div>")
         else:
-            parts.append("<p class='hint'>No catalog entries matched.</p>")
+            parts.append("<p class='hint'>No catalog entries matched on this page.</p>")
+
+        # Pager (plain GET links/forms keep q and lang; no JS needed)
+        base_qs = urllib.parse.urlencode({"q": q, "lang": lang})
+        parts.append("<div class='pager'>")
+        if page > 1:
+            parts.append(f"<a class='btn neutral' href='/?{base_qs}&page={page - 1}'>&larr; Prev</a>")
+        parts.append(f"<span class='page-num'>Catalog page {page}</span>")
+        if len(results) == CATALOG_PAGE_SIZE:
+            parts.append(f"<a class='btn neutral' href='/?{base_qs}&page={page + 1}'>Next &rarr;</a>")
+        parts.append("</div>")
     except Exception as e:
         parts.append(f"<p class='notice error'>Could not load the catalog: {esc(e)}</p>")
     parts.append("</section>")
@@ -327,8 +383,16 @@ def render_page(q, lang, msg, msg_error):
         parts.append("<p class='hint'>No ZIM files yet. Search the catalog above and "
                      "download one to get started.</p>")
 
-    parts.append("<p class='hint'>After downloads finish, run "
-                 "<code>docker compose restart kiwix</code> so kiwix-serve picks up the new files.</p>")
+    if socket_ok:
+        parts.append("<p class='hint'>kiwix-serve restarts automatically when a "
+                     "download completes or a file is deleted.</p>"
+                     "<form method='post' action='/restart'>"
+                     "<button type='submit' class='neutral'>Restart the server now</button></form>")
+    else:
+        parts.append("<p class='hint'>After downloads finish, run "
+                     "<code>docker compose restart kiwix</code> so kiwix-serve picks up the new files. "
+                     "(Mount the container runtime socket into the frontend to automate this &mdash; "
+                     "see the README.)</p>")
     parts.append("</section>")
 
     parts.append("</main><footer>Data from <a href='https://library.kiwix.org'>library.kiwix.org</a>"
@@ -363,9 +427,13 @@ class Handler(BaseHTTPRequestHandler):
         lang = params.get("lang", [""])[0]
         if lang not in LANGUAGES:
             lang = ""
+        try:
+            page = max(1, int(params.get("page", ["1"])[0]))
+        except ValueError:
+            page = 1
         msg = params.get("msg", [""])[0]
         err = params.get("err", [""])[0]
-        self.send_html(render_page(q, lang, msg or err, bool(err)))
+        self.send_html(render_page(q, lang, page, msg or err, bool(err)))
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -403,9 +471,19 @@ class Handler(BaseHTTPRequestHandler):
                 os.unlink(target)
                 with downloads_lock:
                     downloads.pop(filename, None)
-                self.redirect(f"Deleted {filename}. Run `docker compose restart kiwix` to update the server.")
+                if restart_kiwix():
+                    self.redirect(f"Deleted {filename} and restarted the server.")
+                else:
+                    self.redirect(f"Deleted {filename}. Run `docker compose restart kiwix` to update the server.")
             else:
                 self.redirect(f"No such ZIM file: {filename}", error=True)
+
+        elif self.path == "/restart":
+            if restart_kiwix():
+                self.redirect("Server restart requested. New ZIMs will be served in a few seconds.")
+            else:
+                self.redirect("Could not reach the container runtime socket. "
+                              "Run `docker compose restart kiwix` manually.", error=True)
         else:
             self.send_error(404)
 

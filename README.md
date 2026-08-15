@@ -3,6 +3,10 @@
 The fastest way to bootstrap a personal [Kiwix](https://kiwix.org) server: two
 containers and one shared folder.
 
+**Who this is for:** if you know what a terminal is and have Docker (or
+Podman) installed, you'll be reading offline Wikipedia in about 5 minutes.
+No Kiwix knowledge required.
+
 - **kiwix** — the official [`ghcr.io/kiwix/kiwix-tools`](https://github.com/kiwix/kiwix-tools/pkgs/container/kiwix-tools)
   image running `kiwix-serve`, serving every ZIM in `./zims` on port **8080**.
 - **frontend** — a tiny Python image (standard library only, ~60 lines of CSS,
@@ -28,19 +32,20 @@ docker compose up -d
 
 1. Open <http://localhost:3000>, search the catalog, and click **Download**.
    The page auto-refreshes while downloads run (via `<meta refresh>`, not JS).
-2. Once a download completes, tell kiwix-serve to pick it up:
-
-   ```shell
-   docker compose restart kiwix
-   ```
-
+2. When a download completes, the frontend **restarts kiwix-serve for you**
+   through the mounted container socket — no terminal trip needed.
 3. Open <http://localhost:8080> and start reading.
 
 Stop everything with `docker compose down`.
 
-> `kiwix-serve` only loads the ZIM files listed when it starts, so a
-> `restart kiwix` is needed after every download or delete. The frontend
-> reminds you of this on the page.
+> **Why the restart?** `kiwix-serve` only loads the ZIM files listed when it
+> starts. The frontend automates the restart after downloads and deletes (and
+> offers a **Restart the server now** button) by talking to the runtime
+> socket mounted at `/var/run/docker.sock`. If you'd rather not mount the
+> socket — note it grants the frontend container full control over your
+> container runtime, acceptable for personal use but worth knowing — remove
+> that volume line from `compose.yaml` and run `docker compose restart kiwix`
+> manually instead.
 
 ## Podman
 
@@ -52,8 +57,22 @@ podman compose up -d        # if you have the compose provider set up
 podman-compose up -d
 ```
 
-Then `podman compose restart kiwix` (or `podman-compose restart kiwix`)
-after downloads, as above.
+For automatic restarts of `kiwix` after downloads, enable the rootless
+podman socket and point the frontend at it:
+
+```shell
+systemctl --user enable --now podman.socket
+```
+
+then start the stack with the socket path set:
+
+```shell
+CONTAINER_SOCKET="$XDG_RUNTIME_DIR/podman/podman.sock" podman compose up -d
+```
+
+Without it, the frontend falls back to telling you to run
+`podman compose restart kiwix` (or `podman-compose restart kiwix`) after
+downloads.
 
 ## Apple `container` (macOS)
 
@@ -77,7 +96,9 @@ container run -d --name kiwix-frontend -p 3000:3000 -v "$PWD/zims:/zims" \
   -e ZIMDIR=/zims kiwix-frontend
 ```
 
-After downloads finish, restart the server container so it picks up new ZIMs:
+After downloads finish, restart the server container so it picks up new ZIMs
+(the in-page restart button won't work here since no runtime socket is
+mounted):
 
 ```shell
 container stop kiwix && container start kiwix
