@@ -14,13 +14,35 @@ No Kiwix knowledge required.
   files straight into the shared volume, on port **3000**.
 
 ```
-┌────────────────────────┐        ┌────────────────────────┐
-│ frontend  :3000        │        │ kiwix-serve  :8080     │
-│ search catalog,        │───────>│ serves /zims/*.zim     │
-│ download & delete ZIMs │        │                        │
-└───────────┬────────────┘        └───────────┬────────────┘
-            └───────────  ./zims  ────────────┘
+┌─────────────────────────┐       ┌────────────────────────┐
+│ frontend localhost:3000 │       │ kiwix-serve :8080      │
+│ search catalog,         │──────>│ serves /zims/*.zim     │
+│ download & delete ZIMs  │       │                        │
+└────────────┬────────────┘       └───────────┬────────────┘
+             └──────────  ./zims  ────────────┘
 ```
+
+## Why not just use the official Kiwix app?
+
+For one computer or phone, you probably should. The official
+[Kiwix Reader](https://get.kiwix.org/en/solutions/applications/) already has a
+catalog, downloads ZIMs, and provides a polished native reading experience.
+The official Kiwix Server is also the simpler choice when you already manage
+your ZIM files and only need to serve them.
+
+This project is deliberately a small, hackable layer around the official
+`kiwix-tools` image. Its useful differences are:
+
+- the server, downloader, storage, and ports are captured in one Compose file;
+- the browser-based management page works on a headless home server or NAS;
+- all ZIM files live in an ordinary `./zims` directory that is easy to back up,
+  sync, or replace;
+- the frontend is one Python file with no framework or JavaScript build step;
+- it is easy to fork and add your own catalog filters, branding, authentication,
+  scheduled downloads, reverse proxy, storage layout, or backup policy.
+
+It is not intended to replace Kiwix Reader or improve the actual reading UI.
+Think of it as a minimal starting point for a custom, self-hosted Kiwix appliance.
 
 ## Quick start (Docker)
 
@@ -46,6 +68,60 @@ Stop everything with `docker compose down`.
 > container runtime, acceptable for personal use but worth knowing — remove
 > that volume line from `compose.yaml` and run `docker compose restart kiwix`
 > manually instead.
+
+## Share it on your local network
+
+The default Compose configuration exposes the Kiwix library on every network
+interface at port **8080**, while keeping the download/admin frontend restricted
+to `localhost:3000`. This is intentional: the frontend can delete files and has
+access to the container runtime socket, so other LAN devices should not be able
+to open it.
+
+1. Run the stack on the computer that will act as the server:
+
+   ```shell
+   docker compose up -d
+   ```
+
+2. On that computer, download content through <http://localhost:3000>.
+
+3. Find the server's LAN address. It usually looks like `192.168.1.42` or
+   `10.0.0.15`:
+
+   ```shell
+   hostname -I              # Linux
+   ipconfig getifaddr en0   # macOS Wi-Fi
+   ```
+
+   On Windows, run `ipconfig` and look for the active adapter's **IPv4 Address**.
+
+4. From a phone, tablet, or computer on the same Wi-Fi/Ethernet network, open:
+
+   ```text
+   http://SERVER_IP:8080
+   ```
+
+   For example: `http://192.168.1.42:8080`.
+
+5. If it does not connect, allow inbound TCP port `8080` in the server's
+   firewall. On Ubuntu with UFW:
+
+   ```shell
+   sudo ufw allow 8080/tcp
+   ```
+
+No Kiwix app is required on client devices; they use an ordinary web browser.
+Do not configure router port forwarding for port 8080 unless you also add proper
+internet-facing security. This setup is intended for a trusted LAN.
+
+To administer a headless server remotely without exposing port 3000, use an SSH
+tunnel from your computer:
+
+```shell
+ssh -L 3000:localhost:3000 you@SERVER_IP
+```
+
+Then open <http://localhost:3000> on your computer.
 
 ## Podman
 
@@ -92,7 +168,7 @@ container run -d --name kiwix -p 8080:8080 -v "$PWD/zims:/zims" \
 
 # 2. frontend (build the local image first)
 container build --tag kiwix-frontend ./frontend
-container run -d --name kiwix-frontend -p 3000:3000 -v "$PWD/zims:/zims" \
+container run -d --name kiwix-frontend -p 127.0.0.1:3000:3000 -v "$PWD/zims:/zims" \
   -e ZIMDIR=/zims kiwix-frontend
 ```
 

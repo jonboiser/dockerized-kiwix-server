@@ -29,7 +29,8 @@ services:
       # Override CONTAINER_SOCKET for rootless podman; see the README.
       - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     ports:
-      - "3000:3000"
+      # Management UI: keep local because it can delete files and restart containers.
+      - "127.0.0.1:3000:3000"
     environment:
       ZIMDIR: /zims
       KIWIX_CONTAINER: kiwix
