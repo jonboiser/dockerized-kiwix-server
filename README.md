@@ -156,8 +156,18 @@ downloads.
 ## Apple `container` (macOS)
 
 Apple's container tool has no compose support, so run the two containers
-manually. (These commands follow the documented `container` CLI syntax but
-are untested — check `container run --help` on your system.)
+manually. Tested with `container` 1.2.x (`brew install container`, or the
+signed installer from [apple/container](https://github.com/apple/container));
+requires macOS 26+ on Apple silicon.
+
+On first use, start the runtime and install a kernel. Do it in this order:
+`container system start` asks to install the kernel interactively and fails
+in non-interactive shells, so set the kernel explicitly first:
+
+```shell
+container system kernel set --recommended   # one-time
+container system start
+```
 
 ```shell
 # shared volume directory
@@ -182,6 +192,26 @@ mounted):
 ```shell
 container stop kiwix && container start kiwix
 ```
+
+Tear everything down with
+`container stop kiwix kiwix-frontend && container rm kiwix kiwix-frontend`
+(and `container system stop` to shut down the runtime itself).
+
+> **macOS 27 beta caveat:** published ports accept connections and then reset
+> them (`curl: (56) Recv failure: Connection reset by peer`) because the
+> Local Network permission prompt for `container-runtime-linux` never
+> appears, so nothing can be granted in System Settings
+> ([apple/container#2029](https://github.com/apple/container/issues/2029)).
+> Workaround — pre-authorize the container subnet, then reboot (it does not
+> take effect until you do):
+>
+> ```shell
+> sudo defaults write com.apple.network.local-network AllowedEthernetLocalNetworkAddresses -array "192.168.64.0/24"
+> sudo defaults write com.apple.network.local-network AllowedWiFiLocalNetworkAddresses -array "192.168.64.0/24"
+> ```
+>
+> Everything else (image pulls, builds, volumes, guest networking, running
+> the commands above) works as documented on the beta.
 
 ## Adding ZIMs without the frontend
 
