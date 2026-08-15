@@ -160,12 +160,16 @@ manually. Tested with `container` 1.2.x (`brew install container`, or the
 signed installer from [apple/container](https://github.com/apple/container));
 requires macOS 26+ on Apple silicon.
 
-On first use, start the runtime and install a kernel. Do it in this order:
-`container system start` asks to install the kernel interactively and fails
-in non-interactive shells, so set the kernel explicitly first:
+On first use, start the runtime and install a kernel. `container system start`
+asks to install the kernel interactively and fails in non-interactive shells —
+but it does launch the apiserver, which `kernel set` needs. So the working
+one-time sequence is: run `container system start` once (it will error at the
+kernel prompt), then `container system kernel set --recommended`, then
+`container system start` again:
 
 ```shell
-container system kernel set --recommended   # one-time
+container system start                        # errors at the kernel prompt, but launches the apiserver
+container system kernel set --recommended     # one-time
 container system start
 ```
 
