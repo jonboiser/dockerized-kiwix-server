@@ -13,10 +13,12 @@ Pure standard library, pure HTML forms + CSS. No JavaScript anywhere.
 
 import html
 import http.client
+import ipaddress
 import os
 import socket
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -33,6 +35,18 @@ CATALOG_PAGE_SIZE = 24
 # Works with both docker (/var/run/docker.sock) and podman (compat API).
 DOCKER_SOCKET = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
 KIWIX_CONTAINER = os.environ.get("KIWIX_CONTAINER", "kiwix")
+ALLOWED_DOWNLOAD_HOSTS = frozenset(
+    host.strip().lower()
+    for host in os.environ.get(
+        "ALLOWED_DOWNLOAD_HOSTS",
+        "download.kiwix.org,lb.download.kiwix.org,mirror.download.kiwix.org",
+    ).split(",")
+    if host.strip()
+)
+MANUAL_RESTART_HINT = (
+    "Run `docker compose restart kiwix` (Docker) or "
+    "`podman compose restart kiwix` (Podman) manually."
+)
 
 LANGUAGES = {
     "": "All languages",
@@ -93,6 +107,68 @@ def restart_kiwix():
         return resp.status in (200, 204)
     except (OSError, http.client.HTTPException):
         return False
+
+
+def is_allowed_download_url(url):
+    """Return whether URL is an approved direct Kiwix ZIM download."""
+    parsed = urllib.parse.urlparse(url)
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in ("http", "https")
+        and parsed.hostname is not None
+        and parsed.hostname.lower() in ALLOWED_DOWNLOAD_HOSTS
+        and parsed.username is None
+        and parsed.password is None
+        and ((parsed.scheme == "https" and port in (None, 443))
+             or (parsed.scheme == "http" and port in (None, 80)))
+        and parsed.path.lower().endswith(".zim")
+    )
+
+
+def is_public_download_url(url):
+    """Return whether a redirect is a public direct ZIM download URL."""
+    parsed = urllib.parse.urlparse(url)
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if not (
+        parsed.scheme in ("http", "https")
+        and parsed.hostname is not None
+        and parsed.username is None
+        and parsed.password is None
+        and ((parsed.scheme == "https" and port in (None, 443))
+             or (parsed.scheme == "http" and port in (None, 80)))
+        and parsed.path.lower().endswith(".zim")
+    ):
+        return False
+    try:
+        addresses = {
+            result[4][0]
+            for result in socket.getaddrinfo(
+                parsed.hostname, port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        }
+        return bool(addresses) and all(
+            ipaddress.ip_address(address).is_global for address in addresses
+        )
+    except (OSError, ValueError):
+        return False
+
+
+class SafeDownloadRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects to non-public or non-ZIM destinations."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not is_public_download_url(newurl):
+            raise urllib.error.HTTPError(
+                newurl, code, "Redirected to a non-public download host", headers, fp
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def fetch_catalog(q, lang, page):
@@ -158,7 +234,10 @@ def list_installed():
     try:
         for f in os.listdir(ZIMDIR):
             if f.endswith(".zim"):
-                st = os.stat(os.path.join(ZIMDIR, f))
+                try:
+                    st = os.stat(os.path.join(ZIMDIR, f))
+                except FileNotFoundError:
+                    continue
                 zims.append({"filename": f, "size": st.st_size,
                              "modified": time.strftime("%Y-%m-%d", time.localtime(st.st_mtime))})
     except FileNotFoundError:
@@ -171,7 +250,8 @@ def download_worker(url, filename, title):
     final_path = os.path.join(ZIMDIR, filename)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=60) as resp, open(tmp_path, "wb") as out:
+        opener = urllib.request.build_opener(SafeDownloadRedirectHandler())
+        with opener.open(req, timeout=60) as resp, open(tmp_path, "wb") as out:
             total = int(resp.headers.get("Content-Length", 0) or 0)
             with downloads_lock:
                 downloads[filename]["total"] = total
@@ -390,7 +470,9 @@ def render_page(q, lang, page, msg, msg_error):
                      "<button type='submit' class='neutral'>Restart the server now</button></form>")
     else:
         parts.append("<p class='hint'>After downloads finish, run "
-                     "<code>docker compose restart kiwix</code> so kiwix-serve picks up the new files. "
+                     "<code>docker compose restart kiwix</code> (Docker) or "
+                     "<code>podman compose restart kiwix</code> (Podman) so kiwix-serve "
+                     "picks up the new files. "
                      "(Mount the container runtime socket into the frontend to automate this &mdash; "
                      "see the README.)</p>")
     parts.append("</section>")
@@ -445,10 +527,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/download":
             url = form.get("url", [""])[0].strip()
             title = form.get("title", [""])[0].strip()
-            p = urllib.parse.urlparse(url)
-            if p.scheme not in ("http", "https") or not p.path.endswith(".zim"):
-                self.redirect("Invalid ZIM URL.", error=True)
+            if not is_allowed_download_url(url):
+                self.redirect("Invalid or unapproved ZIM URL.", error=True)
                 return
+            p = urllib.parse.urlparse(url)
             filename = os.path.basename(p.path)
             if os.path.exists(os.path.join(ZIMDIR, filename)):
                 self.redirect(f"{filename} is already installed.")
@@ -474,7 +556,7 @@ class Handler(BaseHTTPRequestHandler):
                 if restart_kiwix():
                     self.redirect(f"Deleted {filename} and restarted the server.")
                 else:
-                    self.redirect(f"Deleted {filename}. Run `docker compose restart kiwix` to update the server.")
+                    self.redirect(f"Deleted {filename}. {MANUAL_RESTART_HINT}")
             else:
                 self.redirect(f"No such ZIM file: {filename}", error=True)
 
@@ -483,12 +565,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect("Server restart requested. New ZIMs will be served in a few seconds.")
             else:
                 self.redirect("Could not reach the container runtime socket. "
-                              "Run `docker compose restart kiwix` manually.", error=True)
+                              + MANUAL_RESTART_HINT, error=True)
         else:
             self.send_error(404)
 
     def log_message(self, fmt, *args):
-        print(f"[frontend] {self.address_string()} - {fmt % args}")
+        print(f"[frontend] {self.client_address[0]} - {fmt % args}")
 
 
 if __name__ == "__main__":

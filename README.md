@@ -71,17 +71,20 @@ Stop everything with `docker compose down`.
 
 ## Share it on your local network
 
-The default Compose configuration exposes the Kiwix library on every network
-interface at port **8080**, while keeping the download/admin frontend restricted
-to `localhost:3000`. This is intentional: the frontend can delete files and has
-access to the container runtime socket, so other LAN devices should not be able
-to open it.
+The default Compose configuration keeps both services on localhost. To share
+the Kiwix reader on a trusted LAN, explicitly bind port **8080** to every network
+interface. The download/admin frontend remains restricted to `localhost:3000`:
+it can delete files and has access to the container runtime socket, so other LAN
+devices should not be able to open it.
 
 1. Run the stack on the computer that will act as the server:
 
    ```shell
-   docker compose up -d
+   KIWIX_BIND_ADDRESS=0.0.0.0 docker compose up -d
    ```
+
+   With Podman, use the same setting with your Compose command, for example
+   `KIWIX_BIND_ADDRESS=0.0.0.0 podman compose up -d`.
 
 2. On that computer, download content through <http://localhost:3000>.
 
@@ -184,6 +187,12 @@ container stop kiwix && container start kiwix
 
 You can always drop any `.zim` file into `./zims` yourself (e.g. from
 <https://download.kiwix.org/zim/>) and then restart the kiwix container.
+
+For safety, initial frontend downloads are limited to the official
+`download.kiwix.org` hosts. Their load balancer redirects to public mirrors;
+redirects to loopback, private, link-local, or otherwise non-public addresses
+are rejected. A fork that uses another trusted catalog can set a comma-separated
+`ALLOWED_DOWNLOAD_HOSTS` value when starting Compose.
 
 ## Layout
 

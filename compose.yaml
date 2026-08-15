@@ -16,9 +16,10 @@ services:
         done
         exec kiwix-serve --port 8080 /zims/*.zim
     volumes:
-      - ./zims:/zims
+      - ./zims:/zims:ro
     ports:
-      - "8080:8080"
+      # Reader UI: local by default; opt into LAN access as documented.
+      - "${KIWIX_BIND_ADDRESS:-127.0.0.1}:8080:8080"
     restart: unless-stopped
 
   frontend:
@@ -34,4 +35,5 @@ services:
     environment:
       ZIMDIR: /zims
       KIWIX_CONTAINER: kiwix
+      ALLOWED_DOWNLOAD_HOSTS: ${ALLOWED_DOWNLOAD_HOSTS:-download.kiwix.org,lb.download.kiwix.org,mirror.download.kiwix.org}
     restart: unless-stopped
