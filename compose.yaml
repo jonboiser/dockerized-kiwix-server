@@ -1,7 +1,7 @@
 services:
   kiwix:
     # Official Kiwix image: https://github.com/kiwix/kiwix-tools/pkgs/container/kiwix-tools
-    image: ghcr.io/kiwix/kiwix-tools:latest
+    image: ${KIWIX_IMAGE:-ghcr.io/kiwix/kiwix-tools:latest}
     # Fixed name so the frontend can restart this container via the runtime socket.
     container_name: kiwix
     # Wait until at least one ZIM exists, then serve everything in /zims.

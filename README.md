@@ -191,8 +191,16 @@ You can always drop any `.zim` file into `./zims` yourself (e.g. from
 For safety, initial frontend downloads are limited to the official
 `download.kiwix.org` hosts. Their load balancer redirects to public mirrors;
 redirects to loopback, private, link-local, or otherwise non-public addresses
-are rejected. A fork that uses another trusted catalog can set a comma-separated
-`ALLOWED_DOWNLOAD_HOSTS` value when starting Compose.
+are rejected, and all download hops must use HTTPS. A fork that uses another
+trusted catalog can set a comma-separated `ALLOWED_DOWNLOAD_HOSTS` value when
+starting Compose.
+
+The Kiwix image defaults to `ghcr.io/kiwix/kiwix-tools:latest`. For repeatable
+deployments, override `KIWIX_IMAGE` with a tested version tag or digest:
+
+```shell
+KIWIX_IMAGE=ghcr.io/kiwix/kiwix-tools:VERSION docker compose up -d
+```
 
 ## Layout
 

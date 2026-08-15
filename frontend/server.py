@@ -30,6 +30,7 @@ CATALOG_URL = "https://library.kiwix.org/catalog/v2/entries"
 CATALOG_BASE = "https://library.kiwix.org"
 USER_AGENT = "dockerized-kiwix-server/2.0"
 CATALOG_PAGE_SIZE = 24
+CATALOG_CACHE_SIZE = 128
 
 # Docker-compatible socket used to restart kiwix-serve after downloads.
 # Works with both docker (/var/run/docker.sock) and podman (compat API).
@@ -44,8 +45,9 @@ ALLOWED_DOWNLOAD_HOSTS = frozenset(
     if host.strip()
 )
 MANUAL_RESTART_HINT = (
-    "Run `docker compose restart kiwix` (Docker) or "
-    "`podman compose restart kiwix` (Podman) manually."
+    f"Run `docker compose restart {KIWIX_CONTAINER}` (Docker), "
+    f"`podman compose restart {KIWIX_CONTAINER}`, or "
+    f"`podman-compose restart {KIWIX_CONTAINER}` (Podman) manually."
 )
 
 LANGUAGES = {
@@ -117,13 +119,12 @@ def is_allowed_download_url(url):
     except ValueError:
         return False
     return (
-        parsed.scheme in ("http", "https")
+        parsed.scheme == "https"
         and parsed.hostname is not None
         and parsed.hostname.lower() in ALLOWED_DOWNLOAD_HOSTS
         and parsed.username is None
         and parsed.password is None
-        and ((parsed.scheme == "https" and port in (None, 443))
-             or (parsed.scheme == "http" and port in (None, 80)))
+        and port in (None, 443)
         and parsed.path.lower().endswith(".zim")
     )
 
@@ -136,12 +137,11 @@ def is_public_download_url(url):
     except ValueError:
         return False
     if not (
-        parsed.scheme in ("http", "https")
+        parsed.scheme == "https"
         and parsed.hostname is not None
         and parsed.username is None
         and parsed.password is None
-        and ((parsed.scheme == "https" and port in (None, 443))
-             or (parsed.scheme == "http" and port in (None, 80)))
+        and port in (None, 443)
         and parsed.path.lower().endswith(".zim")
     ):
         return False
@@ -149,7 +149,7 @@ def is_public_download_url(url):
         addresses = {
             result[4][0]
             for result in socket.getaddrinfo(
-                parsed.hostname, port or (443 if parsed.scheme == "https" else 80),
+                parsed.hostname, port or 443,
                 type=socket.SOCK_STREAM,
             )
         }
@@ -221,7 +221,10 @@ def fetch_catalog(q, lang, page):
             entries.append(entry)
 
     with catalog_lock:
+        catalog_cache.pop(key, None)
         catalog_cache[key] = (now, entries)
+        while len(catalog_cache) > CATALOG_CACHE_SIZE:
+            catalog_cache.pop(next(iter(catalog_cache)))
     return entries
 
 
@@ -469,9 +472,11 @@ def render_page(q, lang, page, msg, msg_error):
                      "<form method='post' action='/restart'>"
                      "<button type='submit' class='neutral'>Restart the server now</button></form>")
     else:
+        container = esc(KIWIX_CONTAINER)
         parts.append("<p class='hint'>After downloads finish, run "
-                     "<code>docker compose restart kiwix</code> (Docker) or "
-                     "<code>podman compose restart kiwix</code> (Podman) so kiwix-serve "
+                     f"<code>docker compose restart {container}</code> (Docker), "
+                     f"<code>podman compose restart {container}</code>, or "
+                     f"<code>podman-compose restart {container}</code> (Podman) so kiwix-serve "
                      "picks up the new files. "
                      "(Mount the container runtime socket into the frontend to automate this &mdash; "
                      "see the README.)</p>")
